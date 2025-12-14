@@ -1,44 +1,19 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const { ObjectId } = mongoose.Types;
 const app = express();
-const PORT = 5000;
-const nodemailer = require('nodemailer');
-
+const PORT = process.env.PORT || 5000; 
 app.use(cors());
 app.use(express.json());
 
-const MONGO_URI = "mongodb://127.0.0.1:27017/silverconnect";
+const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/silverconnect"; 
 
 mongoose.connect(MONGO_URI)
-    .then(() => console.log("✅ Connected to Local MongoDB"))
+    .then(() => console.log("✅ Connected to MongoDB"))
     .catch(err => console.error("❌ MongoDB Error:", err));
-
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: 'batool.amina.110@gmail.com',
-        pass: 'Amina@110'
-    }
-});
-
-const sendMail = (to, subject, html) => {
-    const mailOptions = {
-        from: 'SilverConnect batool.amina.110@gmail.com',
-        to: to,
-        subject: subject,
-        html: html
-    };
-    
-    transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-            console.error('Email sending error:', error);
-        } else {
-            console.log('Email sent:', info.response);
-        }
-    });
-};
 
 const UserSchema = new mongoose.Schema({
     fullName: String,
@@ -388,20 +363,6 @@ app.post('/api/bookings', async (req, res) => {
 
         await newBooking.save();
         
-        const helperSubject = `🔔 New Booking Request from ${user.fullName}`;
-        const helperHtml = `
-            <p>Hello ${helperName},</p>
-            <p>You have received a new booking request from ${user.fullName}.</p>
-            <ul>
-                <li><strong>Date:</strong> ${date} (${startTime} - ${endTime})</li>
-                <li><strong>Client Contact:</strong> ${user.fullName} (${userEmail})</li>
-                <li><strong>Address:</strong> ${address}</li>
-                <li><strong>Notes:</strong> ${notes}</li>
-            </ul>
-            <p>Please log into your Helper Dashboard to accept or reject the job.</p>
-        `;
-        sendMail(helperEmail, helperSubject, helperHtml);
-
         res.json({ message: "Booking confirmed", status: "confirmed" });
     } catch (err) {
         console.error("Error creating booking:", err.message);
@@ -417,22 +378,6 @@ app.put('/api/bookings/:id/approve', async (req, res) => {
             { new: true }
         );
         
-        if (updatedBooking) {
-            const clientSubject = `✅ Your Booking with ${updatedBooking.helperName} is CONFIRMED`;
-            const clientHtml = `
-                <p>Hello ${updatedBooking.userName},</p>
-                <p>Your booking with ${updatedBooking.helperName} on ${updatedBooking.date} at ${updatedBooking.startTime} has been successfully confirmed!</p>
-                <p>Booking Details:</p>
-                <ul>
-                    <li><strong>Date & Time:</strong> ${updatedBooking.date} (${updatedBooking.startTime} - ${updatedBooking.endTime})</li>
-                    <li><strong>Helper Contact:</strong> ${updatedBooking.helperName} (${updatedBooking.helperEmail})</li>
-                    <li><strong>Address:</strong> ${updatedBooking.address}</li>
-                </ul>
-                <p>You can view the details in your Dashboard.</p>
-            `;
-            sendMail(updatedBooking.userEmail, clientSubject, clientHtml);
-        }
-
         res.json(updatedBooking);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -446,16 +391,6 @@ app.put('/api/bookings/:id/reject', async (req, res) => {
             { status: 'Rejected' },
             { new: true }
         );
-        
-        if (updatedBooking) {
-            const clientSubject = `❌ Your Booking with ${updatedBooking.helperName} was Rejected`;
-            const clientHtml = `
-                <p>Hello ${updatedBooking.userName},</p>
-                <p>We regret to inform you that your booking request with ${updatedBooking.helperName} for ${updatedBooking.date} has been rejected.</p>
-                <p>You may try booking a different date or select another helper.</p>
-            `;
-            sendMail(updatedBooking.userEmail, clientSubject, clientHtml);
-        }
         
         res.json(updatedBooking);
     } catch (err) {
@@ -471,16 +406,6 @@ app.put('/api/bookings/:id/cancel', async (req, res) => {
             { new: true }
         );
         
-        if (updatedBooking) {
-            const helperSubject = `🚨 Booking Cancelled by Client: ${updatedBooking.userName}`;
-            const helperHtml = `
-                <p>Hello ${updatedBooking.helperName},</p>
-                <p>Please be advised that the booking for ${updatedBooking.date} (${updatedBooking.startTime}) has been **cancelled by the client**, ${updatedBooking.userName}.</p>
-                <p>The status of this job has been updated to 'Cancelled'.</p>
-            `;
-            sendMail(updatedBooking.helperEmail, helperSubject, helperHtml);
-        }
-
         res.json(updatedBooking);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -507,7 +432,7 @@ app.post('/api/reviews', async (req, res) => {
         }
         
         if (!ObjectId.isValid(data.helperId)) {
-            return res.status(400).json({ message: "Invalid helper ID format." });
+            return res.status(400).json({ message: "Invalid Helper ID format." });
         }
         const helper_objectId = new ObjectId(data.helperId);
         
