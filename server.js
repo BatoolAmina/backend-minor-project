@@ -6,8 +6,16 @@ const mongoose = require('mongoose');
 const { ObjectId } = mongoose.Types;
 const multer = require('multer');
 const path = require('path');
+const cloudinary = require('cloudinary').v2;
+const streamifier = require('streamifier');
 const app = express();
 const PORT = process.env.PORT || 5000; 
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 const upload = multer({ 
     storage: multer.memoryStorage(),
@@ -89,6 +97,22 @@ const ContactSchema = new mongoose.Schema({
 });
 const Contact = mongoose.model('Contact', ContactSchema);
 
+const uploadStream = (req, folderName) => {
+    return new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+            { folder: folderName, public_id: req.params.email + '_' + Date.now() },
+            (error, result) => {
+                if (result) {
+                    resolve(result);
+                } else {
+                    reject(error);
+                }
+            }
+        );
+        streamifier.createReadStream(req.file.buffer).pipe(stream);
+    });
+};
+
 app.post('/api/register', async (req, res) => {
     try {
         const { fullName, email, password, role } = req.body;
@@ -143,17 +167,15 @@ app.post('/api/google-login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- UPDATED ROUTE: HANDLES JSON PAYLOAD (from ProfilePage) AND SYNC HELPER DATA ---
 app.put('/api/users/:email', async (req, res) => {
     try {
         const email = req.params.email;
-        const updateFields = req.body; // Expects JSON payload from ProfilePage
+        const updateFields = req.body;
         
         if (!updateFields || Object.keys(updateFields).length === 0) {
              return res.status(400).json({ message: "Request body is empty." });
         }
 
-        // 1. Update the main User document
         const updatedUser = await User.findOneAndUpdate(
             { email: email }, 
             { $set: updateFields },
@@ -164,19 +186,18 @@ app.put('/api/users/:email', async (req, res) => {
             return res.status(404).json({ message: "User not found" });
         }
 
-        // 2. If the user is a helper, also update the Helper profile for public sync
         if (updatedUser.role === 'helper') {
             const helperUpdateData = {
-                name: updateFields.fullName || updatedUser.fullName, // Sync FullName to Name
+                name: updateFields.fullName || updatedUser.fullName,
                 image: updateFields.image || updatedUser.image,
-                location: updateFields.address || updatedUser.address, // Sync Address to Location
+                location: updateFields.address || updatedUser.address,
                 bio: updateFields.bio || updatedUser.bio
             };
             
             await Helper.findOneAndUpdate(
                 { email: email },
                 { $set: helperUpdateData },
-                { new: false } // We just want to ensure it's updated, no need for the new document back
+                { new: false }
             );
         }
 
@@ -189,7 +210,50 @@ app.put('/api/users/:email', async (req, res) => {
         });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-// -----------------------------------------------------------------------------------
+
+app.put('/api/users/:email/image-upload', upload.single('image'), async (req, res) => {
+    try {
+        const email = req.params.email;
+        let newImageUrl = null;
+        
+        if (!req.file) {
+            return res.status(400).json({ message: "No file provided." });
+        }
+
+        const uploadResult = await uploadStream(req, 'user-avatars');
+        newImageUrl = uploadResult.secure_url;
+
+        const updatedUser = await User.findOneAndUpdate(
+            { email },
+            { $set: { image: newImageUrl } },
+            { new: true }
+        );
+
+        if (!updatedUser) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        if (updatedUser.role === 'helper') {
+            await Helper.findOneAndUpdate(
+                { email },
+                { $set: { image: newImageUrl } }
+            );
+        }
+        
+        res.json({ 
+            message: "Image updated successfully", 
+            user: { 
+                ...updatedUser.toObject(), 
+                image: newImageUrl, 
+                name: updatedUser.fullName 
+            } 
+        });
+
+    } catch (err) {
+        console.error("User image upload error:", err);
+        res.status(500).json({ error: "Server Error during image upload.", detailedError: err.message });
+    }
+});
 
 app.put('/api/admin/users/:email/role', async (req, res) => {
     try {
@@ -226,7 +290,7 @@ app.put('/api/admin/users/:email/role', async (req, res) => {
                     bio: updatedUser.bio || 'Helper profile generated by Admin promotion.',
                     image: updatedUser.image || `https://i.pravatar.cc/150?u=${updatedUser.fullName}`,
                     description: 'Generic description, please update.',
-                    status: 'Approved'
+                    status: 'Pending' // Helper must be explicitly approved/promoted by admin
                 });
                 await newHelper.save();
             } else if (existingHelper.status === 'Pending') {
@@ -336,7 +400,6 @@ app.get('/api/helper-profile/:email', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- THIS ROUTE HANDLES FORM-DATA/FILE UPLOADS from HelperDashboard.js ---
 app.put('/api/helper-profile/:email', upload.single('image'), async (req, res) => {
     try {
         const email = req.params.email;
@@ -346,7 +409,8 @@ app.put('/api/helper-profile/:email', upload.single('image'), async (req, res) =
         let newImageUrl = null;
 
         if (req.file) {
-            newImageUrl = `https://i.pravatar.cc/150?u=${email}_${Date.now()}`;
+            const uploadResult = await uploadStream(req, 'helper-profiles');
+            newImageUrl = uploadResult.secure_url; 
         } else if (imageURL) {
             newImageUrl = imageURL;
         }
@@ -547,7 +611,7 @@ app.post('/api/reviews', async (req, res) => {
                 { '_id': helper_objectId },
                 {
                     '$set': {
-                        'rating': parseFloat(new_average_rating.toFixed(1)),
+                        'rating': parseFloat(new_average_average_rating.toFixed(1)),
                         'reviews': stats.count
                     }
                 }
@@ -613,18 +677,6 @@ app.get('/api/users', async (req, res) => {
     try { const users = await User.find({}, '-password'); res.json(users); } 
     catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-const seedHelpers = async () => {
-    const count = await Helper.countDocuments();
-    if (count === 0) {
-        await Helper.create([
-            { id: 1, email: "sarah@test.com", name: "Sarah Jenkins", role: "Medical Assistant", price: "$25/hr", image: "https://i.pravatar.cc/150?img=5", description: "Certified nurse with 5 years experience.", status: 'Approved' },
-            { id: 2, email: "robert@test.com", name: "Robert Fox", role: "Companion", price: "$18/hr", image: "https://i.pravatar.cc/150?img=11", description: "Friendly companion.", status: 'Approved' }
-        ]);
-        console.log("🌱 Seeded initial helpers");
-    }
-};
-seedHelpers();
 
 const all = (arr, fn = Boolean) => arr.every(fn);
 
