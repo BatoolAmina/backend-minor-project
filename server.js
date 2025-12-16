@@ -4,10 +4,18 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const { ObjectId } = mongoose.Types;
+const multer = require('multer');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 5000; 
+
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }
+});
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); 
 
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/silverconnect"; 
 
@@ -129,30 +137,59 @@ app.post('/api/google-login', async (req, res) => {
              }
         }
         res.json({ message: "Google Login Success", user: {
-                 id: user._id, name: user.fullName, email: user.email, role: user.role,
-                 image: user.image, phone: user.phone, address: user.address, bio: user.bio
+                     id: user._id, name: user.fullName, email: user.email, role: user.role,
+                     image: user.image, phone: user.phone, address: user.address, bio: user.bio
         } });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- UPDATED ROUTE: HANDLES JSON PAYLOAD (from ProfilePage) AND SYNC HELPER DATA ---
 app.put('/api/users/:email', async (req, res) => {
     try {
+        const email = req.params.email;
+        const updateFields = req.body; // Expects JSON payload from ProfilePage
+        
+        if (!updateFields || Object.keys(updateFields).length === 0) {
+             return res.status(400).json({ message: "Request body is empty." });
+        }
+
+        // 1. Update the main User document
         const updatedUser = await User.findOneAndUpdate(
-            { email: req.params.email }, 
-            { $set: req.body },
+            { email: email }, 
+            { $set: updateFields },
             { new: true } 
         );
-        if (updatedUser) {
-            res.json({ 
-                message: "Profile updated successfully", 
-                user: {
-                    name: updatedUser.fullName, email: updatedUser.email, role: updatedUser.role,
-                    image: updatedUser.image, phone: updatedUser.phone, address: updatedUser.address, bio: updatedUser.bio
-                }
-            });
-        } else { res.status(404).json({ message: "User not found" }); }
+
+        if (!updatedUser) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // 2. If the user is a helper, also update the Helper profile for public sync
+        if (updatedUser.role === 'helper') {
+            const helperUpdateData = {
+                name: updateFields.fullName || updatedUser.fullName, // Sync FullName to Name
+                image: updateFields.image || updatedUser.image,
+                location: updateFields.address || updatedUser.address, // Sync Address to Location
+                bio: updateFields.bio || updatedUser.bio
+            };
+            
+            await Helper.findOneAndUpdate(
+                { email: email },
+                { $set: helperUpdateData },
+                { new: false } // We just want to ensure it's updated, no need for the new document back
+            );
+        }
+
+        res.json({ 
+            message: "Profile updated successfully", 
+            user: {
+                name: updatedUser.fullName, email: updatedUser.email, role: updatedUser.role,
+                image: updatedUser.image, phone: updatedUser.phone, address: updatedUser.address, bio: updatedUser.bio
+            }
+        });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
+// -----------------------------------------------------------------------------------
 
 app.put('/api/admin/users/:email/role', async (req, res) => {
     try {
@@ -299,15 +336,47 @@ app.get('/api/helper-profile/:email', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/helper-profile/:email', async (req, res) => {
+// --- THIS ROUTE HANDLES FORM-DATA/FILE UPLOADS from HelperDashboard.js ---
+app.put('/api/helper-profile/:email', upload.single('image'), async (req, res) => {
     try {
+        const email = req.params.email;
+        const { role, price, location, experience, bio, description, imageURL } = req.body;
+        
+        const updateData = { role, price, location, experience, bio, description };
+        let newImageUrl = null;
+
+        if (req.file) {
+            newImageUrl = `https://i.pravatar.cc/150?u=${email}_${Date.now()}`;
+        } else if (imageURL) {
+            newImageUrl = imageURL;
+        }
+
+        if (newImageUrl) {
+            updateData.image = newImageUrl;
+        }
+
         const updatedHelper = await Helper.findOneAndUpdate(
-            { email: req.params.email },
-            { $set: req.body },
+            { email },
+            { $set: updateData },
             { new: true }
         );
+
+        if (!updatedHelper) {
+            return res.status(404).json({ message: "Helper profile not found" });
+        }
+        
+        if (newImageUrl) {
+             await User.findOneAndUpdate(
+                { email },
+                { $set: { image: newImageUrl, bio: bio, address: location } }
+            );
+        }
+        
         res.json(updatedHelper);
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { 
+        console.error("Helper profile update error:", err);
+        res.status(500).json({ error: "Server Error during profile update (Check logs for stack trace).", detailedError: err.message }); 
+    }
 });
 
 app.get('/api/bookings', async (req, res) => {
@@ -422,6 +491,7 @@ app.post('/api/reviews', async (req, res) => {
         const data = req.body;
         const required_fields = ['helperId', 'rating', 'reviewText', 'bookingId', 'reviewerName'];
         
+        const all = (arr, fn = Boolean) => arr.every(fn);
         if (!all(required_fields, field => field in data)) {
             return res.status(400).json({ message: 'Missing required review fields' });
         }
