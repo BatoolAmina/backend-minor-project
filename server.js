@@ -132,6 +132,9 @@ const sendVerificationCode = async (contact, otp, type) => {
     if (type === 'email') {
         const transporter = nodemailer.createTransport({
             service: 'gmail', 
+            host: 'smtp.gmail.com', // Explicitly setting host for better debugging
+            port: 465, 
+            secure: true, // Use SMTPS/465
             auth: {
                 user: process.env.EMAIL_USER,
                 pass: process.env.EMAIL_PASS
@@ -144,7 +147,7 @@ const sendVerificationCode = async (contact, otp, type) => {
             subject: 'SilverConnect Verification Code',
             html: `
                 <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
-                    <h2>SilverConnect Verification Code</h2>
+                    <h2>SilverConnect Email Verification</h2>
                     <p>Your One-Time Password (OTP) is:</p>
                     <p style="font-size: 24px; font-weight: bold; color: #1a202c; background-color: #f7fafc; padding: 10px; border-radius: 4px; display: inline-block;">
                         ${otp}
@@ -160,11 +163,17 @@ const sendVerificationCode = async (contact, otp, type) => {
             return true;
         } catch (error) {
             console.error('Nodemailer Error:', error);
-            return false;
+            // Re-throw an error to be handled by the API route
+            throw new Error('Failed to send verification email. Check server connection or App Password.');
         }
     } else if (type === 'phone') {
-        console.log(`(SIMULATED) Sending phone verification code ${otp} to ${contact}. (Twilio integration required)`);
+        // --- Free/Logging Method for Phone OTP ---
+        console.warn('--- PHONE OTP SIMULATION ---');
+        console.log(`[ACTION REQUIRED] Phone OTP for ${contact} is: ${otp}`);
+        console.warn('The user must manually enter this code for successful verification.');
+        console.warn('-----------------------------------');
         return true; 
+        // ----------------------------------------
     }
     return false;
 };
@@ -226,13 +235,17 @@ app.post('/api/otp/request', async (req, res) => {
 
         const sent = await sendVerificationCode(contact, otp, type);
         
-        if (!sent) {
-             return res.status(500).json({ message: `Failed to send ${type} verification code.` });
+        if (!sent && type !== 'email') { // If it's a phone simulation, it always returns true for success
+            return res.status(500).json({ message: `Failed to send ${type} verification code. Check server logs.` });
         }
 
         res.json({ message: `Verification code sent to your ${type}.` });
 
     } catch (err) {
+        // Handle error thrown by sendVerificationCode (Nodemailer error)
+        if (err.message.includes('Failed to send verification email')) {
+            return res.status(500).json({ message: 'Email service error. Check host connection or App Password.' });
+        }
         res.status(500).json({ error: err.message });
     }
 });
