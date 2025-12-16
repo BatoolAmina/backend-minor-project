@@ -141,7 +141,6 @@ const recalculateHelperRating = async (helperId) => {
             }
         );
     } else {
-         // If all reviews are deleted, reset rating to default
         await Helper.updateOne(
             { '_id': helper_objectId },
             {
@@ -668,7 +667,6 @@ app.put('/api/reviews/:id', async (req, res) => {
             return res.status(404).json({ message: "Review not found." });
         }
         
-        // Recalculate rating based on the update
         await recalculateHelperRating(updatedReview.helperId);
 
         res.json(updatedReview);
@@ -687,13 +685,14 @@ app.delete('/api/reviews/:id', async (req, res) => {
             return res.status(404).json({ message: "Review not found." });
         }
 
-        // Recalculate rating after deletion
+        await Booking.updateOne(
+            { id: deletedReview.bookingId },
+            { '$set': { 'isReviewed': false } }
+        );
+        
         await recalculateHelperRating(deletedReview.helperId);
 
-        // Optional: Revert isReviewed flag on Booking (complex, usually skip)
-        // await Booking.updateOne({ id: deletedReview.bookingId }, { '$set': { 'isReviewed': false } });
-
-        res.json({ message: "Review deleted and helper rating recalculated." });
+        res.json({ message: "Review deleted and helper rating recalculated. Booking marked as unreviewed." });
     } catch (err) {
         console.error("Error deleting review:", err);
         res.status(500).json({ error: err.message });
