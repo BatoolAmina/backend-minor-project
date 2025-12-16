@@ -351,6 +351,19 @@ app.put('/api/admin/users/:email/role', async (req, res) => {
     }
 });
 
+app.get('/api/users', async (req, res) => {
+    try { const users = await User.find({}, '-password'); res.json(users); } 
+    catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/users/:email', async (req, res) => {
+    try {
+        const deletedUser = await User.findOneAndDelete({ email: req.params.email });
+        if (deletedUser) res.json({ message: "Account deleted successfully" });
+        else res.status(404).json({ message: "User not found" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/helpers', async (req, res) => {
     try { const helpers = await Helper.find({ status: 'Approved' }); res.json(helpers); } 
     catch (err) { res.status(500).json({ error: err.message }); }
@@ -392,7 +405,11 @@ app.put('/api/helpers/:id/approve', async (req, res) => {
             { new: true }
         );
 
-        if (updatedHelper && updatedHelper.email) {
+        if (!updatedHelper) {
+            return res.status(404).json({ error: "Helper profile not found." });
+        }
+
+        if (updatedHelper.email) {
             await User.findOneAndUpdate(
                 { email: updatedHelper.email },
                 { role: 'helper' } 
@@ -401,7 +418,8 @@ app.put('/api/helpers/:id/approve', async (req, res) => {
 
         res.json(updatedHelper);
     } catch (err) { 
-        res.status(500).json({ error: err.message }); 
+        console.error("Helper Approval Error:", err); 
+        res.status(500).json({ error: "Failed to approve helper profile." });
     }
 });
 
@@ -720,14 +738,6 @@ app.get('/api/reviews/helper/:helperId', async (req, res) => {
     }
 });
 
-app.delete('/api/users/:email', async (req, res) => {
-    try {
-        const deletedUser = await User.findOneAndDelete({ email: req.params.email });
-        if (deletedUser) res.json({ message: "Account deleted successfully" });
-        else res.status(404).json({ message: "User not found" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 app.post('/api/contact', async (req, res) => {
     try { const m = new Contact(req.body); await m.save(); res.json({ message: "Message received successfully!" }); } 
     catch (err) { res.status(500).json({ error: err.message }); }
@@ -743,10 +753,6 @@ app.delete('/api/contact/:id', async (req, res) => {
     catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/users', async (req, res) => {
-    try { const users = await User.find({}, '-password'); res.json(users); } 
-    catch (err) { res.status(500).json({ error: err.message }); }
-});
 
 const all = (arr, fn = Boolean) => arr.every(fn);
 
