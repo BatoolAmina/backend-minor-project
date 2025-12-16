@@ -1,3 +1,4 @@
+const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const express = require('express');
@@ -128,9 +129,44 @@ const generateOTP = () => {
 };
 
 const sendVerificationCode = async (contact, otp, type) => {
-    console.log(`Sending ${type} verification code ${otp} to ${contact}`);
-    
-    return true; 
+    if (type === 'email') {
+        const transporter = nodemailer.createTransport({
+            service: 'gmail', 
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        const mailOptions = {
+            from: process.env.EMAIL_USER,
+            to: contact,
+            subject: 'SilverConnect Verification Code',
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
+                    <h2>SilverConnect Verification Code</h2>
+                    <p>Your One-Time Password (OTP) is:</p>
+                    <p style="font-size: 24px; font-weight: bold; color: #1a202c; background-color: #f7fafc; padding: 10px; border-radius: 4px; display: inline-block;">
+                        ${otp}
+                    </p>
+                    <p>This code is valid for 5 minutes. Use it to verify your account.</p>
+                </div>
+            `,
+        };
+
+        try {
+            await transporter.sendMail(mailOptions);
+            console.log(`Email verification code sent to ${contact}`);
+            return true;
+        } catch (error) {
+            console.error('Nodemailer Error:', error);
+            return false;
+        }
+    } else if (type === 'phone') {
+        console.log(`(SIMULATED) Sending phone verification code ${otp} to ${contact}. (Twilio integration required)`);
+        return true; 
+    }
+    return false;
 };
 
 const recalculateHelperRating = async (helperId) => {
