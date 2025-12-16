@@ -39,7 +39,9 @@ const UserSchema = new mongoose.Schema({
     image: String,
     phone: String,
     address: String,
-    bio: String
+    bio: String,
+    isEmailVerified: { type: Boolean, default: false },
+    isPhoneVerified: { type: Boolean, default: false }
 });
 const User = mongoose.model('User', UserSchema);
 
@@ -97,6 +99,14 @@ const ContactSchema = new mongoose.Schema({
 });
 const Contact = mongoose.model('Contact', ContactSchema);
 
+const OTPSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    otp: { type: String, required: true },
+    type: { type: String, enum: ['email', 'phone'], required: true },
+    createdAt: { type: Date, default: Date.now, expires: 300 }
+});
+const OTP = mongoose.model('OTP', OTPSchema);
+
 const uploadStream = (req, folderName) => {
     return new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
@@ -111,6 +121,16 @@ const uploadStream = (req, folderName) => {
         );
         streamifier.createReadStream(req.file.buffer).pipe(stream);
     });
+};
+
+const generateOTP = () => {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+const sendVerificationCode = async (contact, otp, type) => {
+    console.log(`Sending ${type} verification code ${otp} to ${contact}`);
+    
+    return true; 
 };
 
 const recalculateHelperRating = async (helperId) => {
@@ -153,6 +173,74 @@ const recalculateHelperRating = async (helperId) => {
     }
 };
 
+app.post('/api/otp/request', async (req, res) => {
+    try {
+        const { userId, type, contact } = req.body;
+        const user = await User.findById(userId);
+
+        if (!user) {
+            return res.status(404).json({ message: "User not found." });
+        }
+
+        const otp = generateOTP();
+        
+        await OTP.deleteMany({ userId, type });
+        const newOTP = new OTP({ userId, otp, type });
+        await newOTP.save();
+
+        const sent = await sendVerificationCode(contact, otp, type);
+        
+        if (!sent) {
+             return res.status(500).json({ message: `Failed to send ${type} verification code.` });
+        }
+
+        res.json({ message: `Verification code sent to your ${type}.` });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/otp/verify', async (req, res) => {
+    try {
+        const { userId, otp, type } = req.body;
+        
+        const storedOTP = await OTP.findOne({ userId, otp, type });
+
+        if (!storedOTP) {
+            return res.status(400).json({ message: "Invalid or expired verification code." });
+        }
+
+        const updateField = type === 'email' ? { isEmailVerified: true } : { isPhoneVerified: true };
+        const updatedUser = await User.findByIdAndUpdate(userId, updateField, { new: true });
+
+        await OTP.deleteOne({ _id: storedOTP._id });
+
+        if (!updatedUser) {
+             return res.status(404).json({ message: "User not found after verification." });
+        }
+
+        res.json({ 
+            message: `${type} verified successfully.`,
+            user: { 
+                id: updatedUser._id, 
+                name: updatedUser.fullName, 
+                email: updatedUser.email, 
+                role: updatedUser.role,
+                isEmailVerified: updatedUser.isEmailVerified, 
+                isPhoneVerified: updatedUser.isPhoneVerified,
+                image: updatedUser.image, 
+                phone: updatedUser.phone, 
+                address: updatedUser.address, 
+                bio: updatedUser.bio
+            }
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/register', async (req, res) => {
     try {
         const { fullName, email, password, role } = req.body;
@@ -180,7 +268,8 @@ app.post('/api/login', async (req, res) => {
             message: "Login successful", 
             user: { 
                 id: user._id, name: user.fullName, email: user.email, role: user.role,
-                image: user.image, phone: user.phone, address: user.address, bio: user.bio
+                image: user.image, phone: user.phone, address: user.address, bio: user.bio,
+                isEmailVerified: user.isEmailVerified, isPhoneVerified: user.isPhoneVerified
             } 
         });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -202,7 +291,8 @@ app.post('/api/google-login', async (req, res) => {
         }
         res.json({ message: "Google Login Success", user: {
                      id: user._id, name: user.fullName, email: user.email, role: user.role,
-                     image: user.image, phone: user.phone, address: user.address, bio: user.bio
+                     image: user.image, phone: user.phone, address: user.address, bio: user.bio,
+                     isEmailVerified: user.isEmailVerified, isPhoneVerified: user.isPhoneVerified
         } });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -245,7 +335,8 @@ app.put('/api/users/:email', async (req, res) => {
             message: "Profile updated successfully", 
             user: {
                 name: updatedUser.fullName, email: updatedUser.email, role: updatedUser.role,
-                image: updatedUser.image, phone: updatedUser.phone, address: updatedUser.address, bio: updatedUser.bio
+                image: updatedUser.image, phone: updatedUser.phone, address: updatedUser.address, bio: updatedUser.bio,
+                isEmailVerified: updatedUser.isEmailVerified, isPhoneVerified: updatedUser.isPhoneVerified
             }
         });
     } catch (err) { res.status(500).json({ error: err.message }); }
