@@ -130,11 +130,12 @@ const generateOTP = () => {
 
 const sendVerificationCode = async (contact, otp, type) => {
     if (type === 'email') {
+        // --- OPTIMIZED EMAIL CONFIGURATION (Port 587) ---
         const transporter = nodemailer.createTransport({
-            service: 'gmail', 
-            host: 'smtp.gmail.com', // Explicitly setting host for better debugging
-            port: 465, 
-            secure: true, // Use SMTPS/465
+            host: 'smtp.gmail.com',
+            port: 587, 
+            secure: false, // Set to false for port 587
+            requireTLS: true, // Force TLS for secure transmission
             auth: {
                 user: process.env.EMAIL_USER,
                 pass: process.env.EMAIL_PASS
@@ -163,17 +164,15 @@ const sendVerificationCode = async (contact, otp, type) => {
             return true;
         } catch (error) {
             console.error('Nodemailer Error:', error);
-            // Re-throw an error to be handled by the API route
             throw new Error('Failed to send verification email. Check server connection or App Password.');
         }
     } else if (type === 'phone') {
-        // --- Free/Logging Method for Phone OTP ---
+        // --- FREE/LOGGING METHOD FOR PHONE OTP ---
         console.warn('--- PHONE OTP SIMULATION ---');
         console.log(`[ACTION REQUIRED] Phone OTP for ${contact} is: ${otp}`);
         console.warn('The user must manually enter this code for successful verification.');
         console.warn('-----------------------------------');
         return true; 
-        // ----------------------------------------
     }
     return false;
 };
@@ -235,14 +234,13 @@ app.post('/api/otp/request', async (req, res) => {
 
         const sent = await sendVerificationCode(contact, otp, type);
         
-        if (!sent && type !== 'email') { // If it's a phone simulation, it always returns true for success
+        if (!sent && type !== 'email') { 
             return res.status(500).json({ message: `Failed to send ${type} verification code. Check server logs.` });
         }
 
         res.json({ message: `Verification code sent to your ${type}.` });
 
     } catch (err) {
-        // Handle error thrown by sendVerificationCode (Nodemailer error)
         if (err.message.includes('Failed to send verification email')) {
             return res.status(500).json({ message: 'Email service error. Check host connection or App Password.' });
         }
