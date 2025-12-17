@@ -2,9 +2,30 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const { ObjectId } = mongoose.Types;
+
 const app = express();
 const PORT = process.env.PORT || 5000; 
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true
+});
+
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'helper-profiles',
+        allowed_formats: ['jpg', 'png', 'jpeg'],
+        transformation: [{ width: 500, height: 500, crop: 'limit' }]
+    },
+});
+const upload = multer({ storage: storage });
 
 const allowedOrigins = [
     'http://localhost:3000',
@@ -198,6 +219,14 @@ app.get('/api/helpers/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/helper-profile/:email', async (req, res) => {
+    try {
+        const helper = await Helper.findOne({ email: req.params.email });
+        if (helper) res.json(helper);
+        else res.status(404).json({ message: "Helper profile not found." });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/helpers', async (req, res) => {
     try {
         const count = await Helper.countDocuments();
@@ -212,6 +241,43 @@ app.put('/api/helpers/:id', async (req, res) => {
         const updated = await Helper.findOneAndUpdate({ id: parseInt(req.params.id) }, { $set: req.body }, { new: true });
         res.json(updated);
     } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/helper-profile/:email', upload.single('image'), async (req, res) => {
+    try {
+        const email = req.params.email;
+        const updateData = { ...req.body };
+        
+        if (req.file) {
+            updateData.image = req.file.path; 
+        }
+
+        const userUpdatePayload = {
+            fullName: updateData.name || updateData.fullName,
+            phone: updateData.phone,
+            address: updateData.location || updateData.address,
+            bio: updateData.bio
+        };
+        if (updateData.image) userUpdatePayload.image = updateData.image;
+
+        const updatedUser = await User.findOneAndUpdate(
+            { email },
+            { $set: userUpdatePayload },
+            { new: true }
+        );
+
+        if (!updatedUser) return res.status(404).json({ message: "User not found" });
+
+        const updatedHelper = await Helper.findOneAndUpdate(
+            { email },
+            { $set: updateData },
+            { new: true }
+        );
+
+        res.json(updatedHelper || updatedUser);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.put('/api/helpers/:id/approve', async (req, res) => {
