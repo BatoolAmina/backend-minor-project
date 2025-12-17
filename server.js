@@ -98,9 +98,7 @@ const recalculateHelperRating = async (helperId) => {
     } catch (err) { console.error("Rating Recalc Error:", err); }
 };
 
-const all = (arr, fn = Boolean) => arr.every(fn);
-
-// --- Routes ---
+// --- AUTH & USER ROUTES ---
 
 app.post('/api/register', async (req, res) => {
     try {
@@ -122,6 +120,20 @@ app.post('/api/login', async (req, res) => {
         res.json({ message: "Login successful", user });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+app.get('/api/users', async (req, res) => {
+    try { res.json(await User.find({}, '-password')); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/users/:email', async (req, res) => {
+    try {
+        const deletedUser = await User.findOneAndDelete({ email: req.params.email });
+        if (deletedUser) res.json({ message: "Account deleted successfully" });
+        else res.status(404).json({ message: "User not found" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- ADMIN: ROLE & PERMISSIONS ---
 
 app.put('/api/admin/users/:email/role', async (req, res) => {
     try {
@@ -159,6 +171,43 @@ app.put('/api/admin/users/:email/role', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- HELPER PROFILE ROUTES ---
+
+app.get('/api/helpers', async (req, res) => {
+    try { res.json(await Helper.find({ status: 'Approved' })); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/admin/helpers', async (req, res) => {
+    try { res.json(await Helper.find()); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/helpers/:id', async (req, res) => {
+    try {
+        const helper = await Helper.findOne({ id: parseInt(req.params.id) });
+        if (helper) res.json(helper); else res.status(404).json({ message: "Not found" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/helpers', async (req, res) => {
+    try {
+        const count = await Helper.countDocuments();
+        const newHelper = new Helper({ ...req.body, id: count + 1, status: 'Pending' });
+        await newHelper.save();
+        res.json(newHelper);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/helpers/:id', async (req, res) => {
+    try {
+        const updatedHelper = await Helper.findOneAndUpdate(
+            { id: parseInt(req.params.id) },
+            { $set: req.body },
+            { new: true }
+        );
+        res.json(updatedHelper);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.put('/api/helpers/:id/approve', async (req, res) => {
     try {
         const updatedHelper = await Helper.findOneAndUpdate(
@@ -185,6 +234,12 @@ app.delete('/api/helpers/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- BOOKING ROUTES ---
+
+app.get('/api/bookings', async (req, res) => {
+    try { res.json(await Booking.find()); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/bookings', async (req, res) => {
     try {
         const { userEmail, helperName, date, startTime, endTime, address, phone, notes, helperId, helperEmail } = req.body;
@@ -200,12 +255,86 @@ app.post('/api/bookings', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/users', async (req, res) => {
-    try { res.json(await User.find({}, '-password')); } catch (err) { res.status(500).json({ error: err.message }); }
+app.put('/api/bookings/:id/approve', async (req, res) => {
+    try {
+        const updated = await Booking.findOneAndUpdate({ id: parseInt(req.params.id) }, { status: 'Confirmed' }, { new: true });
+        res.json(updated);
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/helpers', async (req, res) => {
-    try { res.json(await Helper.find()); } catch (err) { res.status(500).json({ error: err.message }); }
+app.put('/api/bookings/:id/reject', async (req, res) => {
+    try {
+        const updated = await Booking.findOneAndUpdate({ id: parseInt(req.params.id) }, { status: 'Rejected' }, { new: true });
+        res.json(updated);
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT} (Email disabled)`));
+app.delete('/api/bookings/:id', async (req, res) => {
+    try {
+        await Booking.findOneAndDelete({ id: parseInt(req.params.id) });
+        res.json({ message: "Booking deleted" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- REVIEW ROUTES ---
+
+app.get('/api/reviews', async (req, res) => {
+    try { res.json(await Review.find().sort({ timestamp: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/reviews', async (req, res) => {
+    try {
+        const data = req.body;
+        const reviewDocument = new Review({ ...data, bookingId: parseInt(data.bookingId) });
+        await reviewDocument.save();
+        
+        await recalculateHelperRating(data.helperId);
+        await Booking.updateOne({ id: parseInt(data.bookingId) }, { isReviewed: true });
+
+        res.status(201).json({ message: 'Review submitted' });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/reviews/:id', async (req, res) => {
+    try {
+        const updatedReview = await Review.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+        if (updatedReview) {
+            await recalculateHelperRating(updatedReview.helperId);
+            res.json(updatedReview);
+        } else res.status(404).json({ message: "Review not found" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/reviews/:id', async (req, res) => {
+    try {
+        const deleted = await Review.findByIdAndDelete(req.params.id);
+        if (deleted) {
+            await recalculateHelperRating(deleted.helperId);
+            await Booking.updateOne({ id: deleted.bookingId }, { isReviewed: false });
+            res.json({ message: "Review deleted" });
+        } else res.status(404).json({ message: "Review not found" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- CONTACT ROUTES ---
+
+app.get('/api/contact', async (req, res) => {
+    try { res.json(await Contact.find().sort({ date: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/contact', async (req, res) => {
+    try {
+        const msg = new Contact(req.body);
+        await msg.save();
+        res.json({ message: "Message received" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/contact/:id', async (req, res) => {
+    try {
+        await Contact.findByIdAndDelete(req.params.id);
+        res.json({ message: "Message deleted" });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
