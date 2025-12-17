@@ -6,20 +6,23 @@ const { ObjectId } = mongoose.Types;
 const app = express();
 const PORT = process.env.PORT || 5000; 
 
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/silverconnect"; 
 
 mongoose.connect(MONGO_URI)
-    .then(() => console.log("✅ Connected to Local MongoDB"))
+    .then(() => console.log("✅ Connected to MongoDB"))
     .catch(err => console.error("❌ MongoDB Error:", err));
 
-// --- Schemas ---
 const UserSchema = new mongoose.Schema({
     fullName: String,
     email: { type: String, unique: true },
-    password: String,
+    password: { type: String },
     role: { type: String, default: 'user' },
     image: String,
     phone: String,
@@ -82,7 +85,6 @@ const ContactSchema = new mongoose.Schema({
 });
 const Contact = mongoose.model('Contact', ContactSchema);
 
-// --- Utility Functions ---
 const recalculateHelperRating = async (helperId) => {
     try {
         const reviews = await Review.find({ helperId });
@@ -98,14 +100,13 @@ const recalculateHelperRating = async (helperId) => {
     } catch (err) { console.error("Rating Recalc Error:", err); }
 };
 
-// --- AUTH & USER ROUTES ---
-
 app.post('/api/register', async (req, res) => {
     try {
         const { fullName, email, password, role } = req.body;
         const existingUser = await User.findOne({ email });
         if (existingUser) return res.status(400).json({ message: "Email already exists" });
-        const image = `https://i.pravatar.cc/150?u=${fullName}`;
+        
+        const image = `https://i.pravatar.cc/150?u=${encodeURIComponent(fullName)}`;
         const newUser = new User({ fullName, email, password, role, image });
         await newUser.save();
         res.json({ message: "Registration successful!", user: newUser });
@@ -117,23 +118,26 @@ app.post('/api/login', async (req, res) => {
         const { email, password } = req.body;
         const user = await User.findOne({ email });
         if (!user || user.password !== password) return res.status(401).json({ message: "Invalid credentials" });
+        
         res.json({ message: "Login successful", user });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/users', async (req, res) => {
-    try { res.json(await User.find({}, '-password')); } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/users/:email', async (req, res) => {
+app.post('/api/google-login', async (req, res) => {
     try {
-        const deletedUser = await User.findOneAndDelete({ email: req.params.email });
-        if (deletedUser) res.json({ message: "Account deleted successfully" });
-        else res.status(404).json({ message: "User not found" });
+        const { email, name, image } = req.body;
+        let user = await User.findOne({ email });
+        
+        if (!user) {
+            user = new User({ fullName: name, email, image, role: 'user' });
+            await user.save();
+        } else if (image && user.image !== image) {
+            user.image = image;
+            await user.save();
+        }
+        res.json({ message: "Google Login Success", user });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// --- ADMIN: ROLE & PERMISSIONS ---
 
 app.put('/api/admin/users/:email/role', async (req, res) => {
     try {
@@ -171,41 +175,12 @@ app.put('/api/admin/users/:email/role', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- HELPER PROFILE ROUTES ---
-
 app.get('/api/helpers', async (req, res) => {
     try { res.json(await Helper.find({ status: 'Approved' })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/admin/helpers', async (req, res) => {
     try { res.json(await Helper.find()); } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/helpers/:id', async (req, res) => {
-    try {
-        const helper = await Helper.findOne({ id: parseInt(req.params.id) });
-        if (helper) res.json(helper); else res.status(404).json({ message: "Not found" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/helpers', async (req, res) => {
-    try {
-        const count = await Helper.countDocuments();
-        const newHelper = new Helper({ ...req.body, id: count + 1, status: 'Pending' });
-        await newHelper.save();
-        res.json(newHelper);
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.put('/api/helpers/:id', async (req, res) => {
-    try {
-        const updatedHelper = await Helper.findOneAndUpdate(
-            { id: parseInt(req.params.id) },
-            { $set: req.body },
-            { new: true }
-        );
-        res.json(updatedHelper);
-    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/helpers/:id/approve', async (req, res) => {
@@ -224,18 +199,6 @@ app.put('/api/helpers/:id/approve', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/helpers/:id', async (req, res) => {
-    try {
-        const deletedHelper = await Helper.findOneAndDelete({ id: parseInt(req.params.id) });
-        if (deletedHelper && deletedHelper.email) {
-            await User.findOneAndUpdate({ email: deletedHelper.email }, { role: 'user' });
-        }
-        res.json({ message: "Helper profile removed" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- BOOKING ROUTES ---
-
 app.get('/api/bookings', async (req, res) => {
     try { res.json(await Booking.find()); } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -251,7 +214,7 @@ app.post('/api/bookings', async (req, res) => {
             date, startTime, endTime, address, phone, notes, status: 'Pending'
         });
         await newBooking.save();
-        res.json({ message: "Booking pending approval", status: "Pending" });
+        res.json({ message: "Booking confirmed", status: "Pending" });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -261,22 +224,6 @@ app.put('/api/bookings/:id/approve', async (req, res) => {
         res.json(updated);
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-app.put('/api/bookings/:id/reject', async (req, res) => {
-    try {
-        const updated = await Booking.findOneAndUpdate({ id: parseInt(req.params.id) }, { status: 'Rejected' }, { new: true });
-        res.json(updated);
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/bookings/:id', async (req, res) => {
-    try {
-        await Booking.findOneAndDelete({ id: parseInt(req.params.id) });
-        res.json({ message: "Booking deleted" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// --- REVIEW ROUTES ---
 
 app.get('/api/reviews', async (req, res) => {
     try { res.json(await Review.find().sort({ timestamp: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
@@ -295,16 +242,6 @@ app.post('/api/reviews', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/reviews/:id', async (req, res) => {
-    try {
-        const updatedReview = await Review.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
-        if (updatedReview) {
-            await recalculateHelperRating(updatedReview.helperId);
-            res.json(updatedReview);
-        } else res.status(404).json({ message: "Review not found" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 app.delete('/api/reviews/:id', async (req, res) => {
     try {
         const deleted = await Review.findByIdAndDelete(req.params.id);
@@ -316,10 +253,8 @@ app.delete('/api/reviews/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- CONTACT ROUTES ---
-
-app.get('/api/contact', async (req, res) => {
-    try { res.json(await Contact.find().sort({ date: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
+app.get('/api/users', async (req, res) => {
+    try { res.json(await User.find({}, '-password')); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/contact', async (req, res) => {
@@ -327,13 +262,6 @@ app.post('/api/contact', async (req, res) => {
         const msg = new Contact(req.body);
         await msg.save();
         res.json({ message: "Message received" });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/contact/:id', async (req, res) => {
-    try {
-        await Contact.findByIdAndDelete(req.params.id);
-        res.json({ message: "Message deleted" });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
